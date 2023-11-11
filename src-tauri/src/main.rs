@@ -1,69 +1,78 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //use serialport::{available_ports, SerialPortType};
-//use serialport::SerialPort;
-use std::io::Read;
-use serial2::SerialPort;
+//use serialport::SerialPort; 
+use std::sync::OnceLock;
+use tauri::{Window, Manager, Wry};
+use tauri::State;
+// use tauri::async_runtime::Mutex;
+use std::sync::Mutex;
 
-// Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
+use crate::db::{HASHMAP, Value};
+mod db;
+mod server;
+
+struct BTServer(Mutex<server::Server>);
+
+pub fn put_front_end(key: &str, value: Value) -> () {
+    let window = WINDOW.get().expect("window is available");
+
+    // check type of value
+    match value {
+        Value::Number(num) => {
+            let ret_data = format!("{}:{}", key, num);
+            window.emit("put-number", ret_data.clone()).expect("emit works");
+        }
+        Value::String(string) => {
+            let ret_data = format!("{}:{}", key, string);
+            window.emit("put-string", ret_data.clone()).expect("emit works");
+        }
+        Value::Boolean(boolean) => {
+            let ret_data = format!("{}:{}", key, boolean);
+            window.emit("put-boolean", ret_data.clone()).expect("emit works");
+        }
+    }
 }
 
-use std::io::{self};
+pub fn put_back_end(key: &str, value: Value) -> () {
+    put_value(key, value);
+}
 
+pub fn put_full(key: &str, value: Value) -> () {
+    put_front_end(key, value.clone());
+    put_back_end(key, value);
+}
+
+#[tauri::command]
+fn put_value(key: &str, value: Value) -> () {
+    HASHMAP.lock().unwrap().insert(key.to_string(), value);
+}
+
+#[tauri::command]
+fn start_bt_server(port: String, state: State<BTServer>) -> () {
+    let server = state.0.lock().unwrap();
+    server.start_server(port);
+}
+
+#[tauri::command]
+fn stop_bt_server(state: State<BTServer>) -> () {
+    let server = state.0.lock().unwrap();
+    server.stop_server();
+}
+
+pub static WINDOW: OnceLock<Window> = OnceLock::new();
 fn main() {
     // Connect to bluetooth classic device using windows::bluetooth::* crate
-    tauri::async_runtime::spawn(async move {
-        let port = SerialPort::open("COM4", 115200);
-        let outport = SerialPort::open("COM5", 115200);
-        match outport {
-            Ok(outport) => {
-                match port {
-                    Ok(mut port) => {
-                        println!("Connected to COM5");
-                        port.set_read_timeout(std::time::Duration::from_millis(10)).unwrap();
-                        port.set_write_timeout(std::time::Duration::from_millis(10)).unwrap();
-                        let mut buffer = [0; 256];
-                        loop {
-                            let read = match port.read(&mut buffer) {
-                                Ok(read) => read,
-                                Err(err) => {
-                                    eprintln!("Error reading from port: {}", err);
-                                    continue;
-                                }
-                            };
-                        
-                            // Process the data in the buffer
-                            let data_str = match std::str::from_utf8(&buffer[..read]) {
-                                Ok(s) => s,
-                                Err(_) => {
-                                    eprintln!("Error: Invalid UTF-8 data in buffer");
-                                    continue;
-                                }
-                            };
-    
-                            println!("{}", data_str);
-                            // Add '|' character to end of data_str
-                            let data_str = format!("{}|", data_str);
-                            if let Err(err) = port.write(data_str.as_bytes()) {
-                                eprintln!("Error writing to port: {}", err);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to open \"{}\". Error: {}", "COM5", e);
-                    }
-                }
-            },
-            Err(_) => todo!()
-        }
-        
-    });
-
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![greet])
+        .setup(move |app| {
+            // Get the window to send data to the front end
+            let window: Window<Wry> = app.get_window("main").unwrap();
+            _ = WINDOW.set(window).expect("Failed to set window");    
+        
+            Ok(())
+        })
+        .manage(BTServer(Mutex::new(server::Server::new())))
+        .invoke_handler(tauri::generate_handler![put_value, start_bt_server, stop_bt_server])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
