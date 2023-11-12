@@ -36,11 +36,39 @@ pub fn put_front_end(key: &str, value: Value) -> () {
 
 pub fn put_back_end(key: &str, value: Value) -> () {
     put_value(key, value);
+    // print hte hashmap now
+    let hashmap = HASHMAP.lock().unwrap();
+    println!("hashmap: {:?}", hashmap);
 }
 
 pub fn put_full(key: &str, value: Value) -> () {
     put_front_end(key, value.clone());
     put_back_end(key, value);
+}
+
+pub fn put_full_json(map: serde_json::Map<String, serde_json::Value>) -> () {
+    for (key, value) in map.iter() {
+        let db_value = match value {
+            serde_json::Value::Number(num) => db::Value::Number(num.as_f64().unwrap()),
+            serde_json::Value::String(s) => db::Value::String(s.clone()),
+            serde_json::Value::Bool(b) => db::Value::Boolean(*b),
+            serde_json::Value::Object(_) | serde_json::Value::Array(_) | serde_json::Value::Null => {
+                continue;
+            }
+        };
+
+        // Check if key begins with "get"
+        if key.starts_with("get") {
+            // Check if key already exists in hashmap
+            let hashmap = HASHMAP.lock().unwrap();
+            if hashmap.contains_key(key) {
+                // Already has key, don't overwrite
+                continue;
+            }
+        }
+
+        put_full(key, db_value);
+    }
 }
 
 #[tauri::command]
